@@ -26,3 +26,27 @@ model Session {
   refreshToken        String?
   refreshTokenExpires DateTime?
 }
+
+model ActivityLog {
+  id           String   @id @default(cuid())
+  shop         String
+  action       String
+  description  String
+  resourceType String?
+  resourceId   String?
+  resourceName String?
+  createdAt    DateTime @default(now())
+
+  @@index([shop, createdAt])
+}
+
+model LowStockAlertReview {
+  id           String   @id @default(cuid())
+  shop         String
+  productId    String
+  productTitle String
+  reviewedAt   DateTime @default(now())
+
+  @@unique([shop, productId])
+  @@index([shop, reviewedAt])
+}
