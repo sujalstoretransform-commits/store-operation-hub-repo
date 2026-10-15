@@ -1,7 +1,7 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "ea44e782621b1b1712e55016503acb35"
-application_url = "https://example.com"
+application_url = "https://store-operation-hub-repo.vercel.app/"
 embedded = true
 name = "store-operations-hub"
 
@@ -45,7 +45,7 @@ api_version = "2027-01"
   topics = [ "app/scopes_update" ]
 
 [auth]
-redirect_urls = [ "https://example.com/api/auth" ]
+redirect_urls = [ "https://store-operation-hub-repo.vercel.app/auth/callback" ]
 
 [build]
 automatically_update_urls_on_dev = true
