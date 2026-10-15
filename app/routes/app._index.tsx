@@ -1,13 +1,12 @@
 import { useLoaderData, type HeadersFunction, type LoaderFunctionArgs, type ActionFunctionArgs, useFetcher } from "react-router";
 import { authenticate } from "../shopify.server";
-import { boundary } from "@shopify/shopify-app-react-router/server";
 import prisma from "app/db.server";
 import { logActivity } from "app/utils/activity-log.server";
 
 const LOW_STOCK_THRESHOLD = 5
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { admin } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
 
   const response = await admin.graphql(`#graphql
     query DashboardData {
@@ -20,7 +19,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       }
 
       lowStockProducts: products(
-        first: 5
+        first: 2
         query: "inventory_total:<=5"
         sortKey: INVENTORY_TOTAL
       ) {
@@ -63,13 +62,30 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     });
   }
 
+  const lowStockProducts = result.data.lowStockProducts.nodes
+
+  const reviews = await prisma.lowStockAlertReview.findMany({
+    where: {
+      shop: session.shop,
+      productId: {
+        in: lowStockProducts.map((product: { id: string }) => product.id)
+      }
+    },
+    select: {
+      productId: true
+    }
+  })
+
+  const reviewedProductIds = reviews.map((review) => review.productId)
+
   return {
     productsCount: result.data.productsCount.count,
     lowStockCount: result.data.lowStockCount.count,
-    lowStockProducts: result.data.lowStockProducts.nodes,
+    lowStockProducts,
     openOrderCount: result.data.openOrders.count,
     unfulfilledOrderCount: result.data.unfulfilledOrders.count,
-    recentOrders: result.data.recentOrders.nodes
+    recentOrders: result.data.recentOrders.nodes,
+    reviewedProductIds,
   };
 };
 
@@ -112,6 +128,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   try {
+    const existingReview = await prisma.lowStockAlertReview.findUnique({
+      where: {
+        shop_productId: {
+          shop: session.shop,
+          productId
+        },
+      }
+    })
+
     await prisma.lowStockAlertReview.upsert({
       where: {
         shop_productId: {
@@ -130,24 +155,42 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       }
     })
 
-    await logActivity({
-      shop: session.shop,
-      action: "LOW_STOCK_ALERT_REVIEWED",
-      description: `Reviewed low-stock alert for ${product.title}`,
-      resourceType: "Product",
-      resourceId: productId,
-      resourceName: product.title
-    })
+    if (!existingReview) {
+      await logActivity({
+        shop: session.shop,
+        action: "LOW_STOCK_ALERT_REVIEWED",
+        description: `Reviewed low-stock alert for ${product.title}`,
+        resourceType: "Product",
+        resourceId: productId,
+        resourceName: product.title
+      })
+    }
 
-    return { ok: true, message: "Alert marked as reviewed." };
+    return {
+      ok: true,
+      message: existingReview
+        ? "Alert review updated"
+        : "Alert marked as reviewed."
+    };
+
   } catch (error) {
     console.error("Failed to save low-stock review:", error);
-    return { ok: false, message: "Could not save the review." };
+
+    return {
+      ok: false,
+      message: "Could not save the review."
+    };
   }
 
 }
 
-const LowStockReviewButton = ({ product }: { product: { id: string, title: string } }) => {
+const LowStockReviewButton = ({
+  product,
+  reviewed
+}: {
+  product: { id: string, title: string },
+  reviewed: boolean
+}) => {
   const fetcher = useFetcher<typeof action>();
 
   return (
@@ -156,9 +199,12 @@ const LowStockReviewButton = ({ product }: { product: { id: string, title: strin
       <input type="hidden" name="productTitle" value={product.title} />
       <button
         type="submit"
-        disabled={fetcher.state !== "idle"}
+        disabled={reviewed || fetcher.state !== "idle"}
       >
-        {fetcher.state !== "idle" ? "Saving..." : "Mark as reviewed"}
+        {fetcher.state !== "idle"
+          ? "Saving..."
+          : reviewed
+            ? "Reviewed" : "Mark as reviewed"}
       </button>
 
       {fetcher.data?.ok === true && (
@@ -179,7 +225,7 @@ export default function Dashboard() {
     { label: "Products", value: data.productsCount, detail: "In your catalog" },
     { label: "Open orders", value: data.openOrderCount, detail: "Currently open" },
     { label: "Unfulfilled", value: data.unfulfilledOrderCount, detail: "Awaiting fulfillment", },
-    { label: "Low stock", value: "—", detail: "Inventory tools are next" },
+    { label: "Low stock", value: data.lowStockCount, detail: `Products with ${LOW_STOCK_THRESHOLD} units or fewer` },
   ];
 
   return (
@@ -234,7 +280,10 @@ export default function Dashboard() {
                     <span className="stock-warning">{product.totalInventory ?? 0} units</span>
                   </div>
 
-                  <LowStockReviewButton product={product} />
+                  <LowStockReviewButton
+                    product={product}
+                    reviewed={data.reviewedProductIds.includes(product.id)}
+                  />
                 </div>
 
               ))}
@@ -246,7 +295,7 @@ export default function Dashboard() {
               )}
             </>
           )}
-          <a href="/app/products" className="section-link">View inventory</a>
+          <s-link href="/app/products">View inventory</s-link>
         </section>
 
         <section className="card">
